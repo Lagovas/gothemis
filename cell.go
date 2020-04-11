@@ -9,11 +9,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash"
 
 	"golang.org/x/crypto/pbkdf2"
 )
 
+// min return min value from pair
 func min(a, b int) int {
 	if a <= b {
 		return a
@@ -21,6 +23,7 @@ func min(a, b int) int {
 	return b
 }
 
+// themisKDF
 func themisKDF(key, label []byte, contexts [][]byte) []byte {
 	out := []byte{0, 0, 0, 1}
 	const implicitKeySize = 32
@@ -36,16 +39,16 @@ func themisKDF(key, label []byte, contexts [][]byte) []byte {
 		}
 		key = implicitKey
 	}
-	hash := hmac.New(sha256.New, key)
-	hash.Write(out[:4])
-	hash.Write(label)
-	hash.Write(out[:1])
+	hmacHash := hmac.New(sha256.New, key)
+	hmacHash.Write(out[:4])
+	hmacHash.Write(label)
+	hmacHash.Write(out[:1])
 	for _, context := range contexts {
 		if len(context) > 0 {
-			hash.Write(context)
+			hmacHash.Write(context)
 		}
 	}
-	return hash.Sum(nil)
+	return hmacHash.Sum(nil)
 }
 
 var THEMIS_SYM_KDF_KEY_LABEL = []byte("Themis secure cell message key")
@@ -65,7 +68,7 @@ const (
 	SOTER_SYM_MAX_KEY_LENGTH               = 128
 )
 
-const authSymMessageHeaderFieldsSize = 32 * 4
+const authSymMessageHeaderFieldsSize = (32 / 8) * 4
 const AuthSymMessageHeaderSize = authSymMessageHeaderFieldsSize + THEMIS_AUTH_SYM_IV_LENGTH + THEMIS_AUTH_SYM_AUTH_TAG_LENGTH
 
 type AuthTagFieldLength [4]byte
@@ -104,6 +107,12 @@ func NewAuthSymMessageHeader(messageLength uint32, iv IV, authTag AuthTag) (*Aut
 	hdr.IV = iv
 	hdr.AuthTag = authTag
 	return hdr, nil
+}
+
+func (hdr *AuthSymMessageHeader) String() string {
+	return fmt.Sprintf("iv_length=%v, tag_length=%v, tag=%v, message_length=%v",
+		binary.LittleEndian.Uint32(hdr.IVLength[:]),
+		binary.LittleEndian.Uint32(hdr.AuthTagLength[:]), hdr.AuthTag, binary.LittleEndian.Uint32(hdr.MessageLength[:]))
 }
 
 func (hdr *AuthSymMessageHeader) Marshal() ([]byte, error) {
@@ -159,8 +168,8 @@ var ErrInvalidKDFAlgorithm = errors.New("invalid kdf algorithm")
 func soterKDF(alg uint32, key, salt []byte) ([]byte, error) {
 	switch alg & SOTER_SYM_KDF_MASK {
 	case SOTER_SYM_PBKDF2:
-		hmac := hmac.New(sha256.New, key)
-		return pbkdf2.Key(key, salt, 0, SOTER_SYM_MAX_KEY_LENGTH/8, func() hash.Hash { return hmac }), nil
+		hmacHash := hmac.New(sha256.New, key)
+		return pbkdf2.Key(key, salt, 0, SOTER_SYM_MAX_KEY_LENGTH/8, func() hash.Hash { return hmacHash }), nil
 	case SOTER_SYM_NOKDF:
 		return key, nil
 	}
@@ -176,11 +185,7 @@ func AuthenticatedSymmetricEncryptMessage(key, message []byte, context Context) 
 	} else if n != THEMIS_AUTH_SYM_IV_LENGTH {
 		return nil, nil, errors.New("can't read enough random data for IV")
 	}
-	derivedKey, err := soterKDF(THEMIS_AUTH_SYM_ALG, kdfKey, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	aes, err := aes.NewCipher(derivedKey)
+	aes, err := aes.NewCipher(kdfKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -199,16 +204,50 @@ func AuthenticatedSymmetricEncryptMessage(key, message []byte, context Context) 
 	return encryptedData, hdr, nil
 }
 
+func AuthenticatedSymmetricDecryptMessage(key, encryptedMessage []byte, authTag *AuthSymMessageHeader, context Context) ([]byte, error) {
+	kdfKey := themisKDF(key, THEMIS_SYM_KDF_KEY_LABEL, [][]byte{messageToKDFContext(encryptedMessage), []byte(context)})
+
+	aes, err := aes.NewCipher(kdfKey)
+	if err != nil {
+		return nil, err
+	}
+	aesGCM, err := cipher.NewGCM(aes)
+	if err != nil {
+		return nil, err
+	}
+	authenticatedBlock := make([]byte, 0, len(encryptedMessage)+len(authTag.AuthTag))
+	authenticatedBlock = append(authenticatedBlock, encryptedMessage...)
+	authenticatedBlock = append(authenticatedBlock, authTag.AuthTag[:]...)
+	decrypted, err := aesGCM.Open(nil, authTag.IV, authenticatedBlock, []byte(context))
+	if err != nil {
+		return nil, err
+	}
+	return decrypted, nil
+
+}
+
 type AuthenticationContext []byte
 
-func CellSeal(key, data []byte, context Context) (EncryptedData, AuthenticationContext, error) {
+func CellSealEncrypt(key, data []byte, context Context) (EncryptedData, error) {
 	encryptedData, authHeader, err := AuthenticatedSymmetricEncryptMessage(key, data, context)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	authContext, err := authHeader.Marshal()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return encryptedData, authContext, nil
+	return append(authContext, encryptedData...), nil
+}
+
+func CellSealDecrypt(key, data []byte, context Context) (EncryptedData, error) {
+	authHeader, err := UnmarshalAuthSymMessageHeader(data[:AuthSymMessageHeaderSize])
+	if err != nil {
+		return nil, err
+	}
+	decryptedData, err := AuthenticatedSymmetricDecryptMessage(key, data[AuthSymMessageHeaderSize:], authHeader, context)
+	if err != nil {
+		return nil, err
+	}
+	return decryptedData, nil
 }
