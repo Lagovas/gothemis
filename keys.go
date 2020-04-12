@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"github.com/cossacklabs/themis/gothemis/keys"
 	"math/big"
 )
 
@@ -51,6 +52,11 @@ type PublicECKey struct {
 	y    *big.Int
 }
 
+func (p *PublicECKey) Public() *ecdsa.PublicKey {
+	curve := TagToCurve(p.tag[:])
+	return &ecdsa.PublicKey{X: p.x, Y: p.y, Curve: curve}
+}
+
 func (key *PublicECKey) Marshal() ([]byte, error) {
 	curveKeySize := TagToCurve(key.tag[:]).Params().BitSize / 8
 	if !compressedPublicKey {
@@ -80,8 +86,8 @@ func (key *PublicECKey) Marshal() ([]byte, error) {
 }
 
 type PrivateECKey struct {
-	tag  [ecKeyTagLength]byte
-	size int32
+	tag     [ecKeyTagLength]byte
+	size    int32
 	private *ecdsa.PrivateKey
 }
 
@@ -89,7 +95,7 @@ func (key *PrivateECKey) Zeroize() {
 	key.private.D.Set(&big.Int{})
 }
 
-func newPrivateECKeyFromBytes(c elliptic.Curve, d []byte)*ecdsa.PrivateKey{
+func newPrivateECKeyFromBytes(c elliptic.Curve, d []byte) *ecdsa.PrivateKey {
 	priv := new(ecdsa.PrivateKey)
 	priv.PublicKey.Curve = c
 	priv.D = new(big.Int).SetBytes(d)
@@ -99,9 +105,10 @@ func newPrivateECKeyFromBytes(c elliptic.Curve, d []byte)*ecdsa.PrivateKey{
 
 func newPrivateECKey(privateKey *ecdsa.PrivateKey) *PrivateECKey {
 	private := &PrivateECKey{private: privateKey}
-	privateData := lengthInBytes(privateKey.D)
+	privateData := privateKey.Params().BitSize / 8
 	copy(private.tag[:], defaultPrivateKeyTag)
-	private.size = int32(privateData + ecKeyHeaderSize)
+	// +1 due to a historical mistake
+	private.size = int32(privateData + ecKeyHeaderSize + 1)
 	return private
 }
 
@@ -117,8 +124,8 @@ func newPublicECKey(privateKey *ecdsa.PrivateKey) *PublicECKey {
 
 func (key *PrivateECKey) Marshal() ([]byte, error) {
 	// +1 due to a historical mistake. more below
-	privateKeySize := key.private.Params().BitSize/8
-	output := make([]byte, ecKeyHeaderSize+ privateKeySize + 1)
+	privateKeySize := key.private.Params().BitSize / 8
+	output := make([]byte, ecKeyHeaderSize+privateKeySize+1)
 	copy(output[:ecKeyTagLength], key.tag[:])
 	binary.BigEndian.PutUint32(output[ecKeyTagLength:ecKeyTagLength+4], uint32(key.size))
 	writer := bytes.NewBuffer(output[:ecKeyHeaderSize])
@@ -141,6 +148,20 @@ func (key *PrivateECKey) Marshal() ([]byte, error) {
 type KeyPair struct {
 	Private *PrivateECKey
 	Public  *PublicECKey
+}
+
+func (k *KeyPair) ToThemisKeyPair()(*keys.Keypair, error){
+	privateKey, err := k.Private.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	publicKey, err := k.Public.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return &keys.Keypair{
+		Private: &keys.PrivateKey{Value:privateKey},
+		Public:	&keys.PublicKey{Value: publicKey}}, nil
 }
 
 func NewECKeyPair() (*KeyPair, error) {

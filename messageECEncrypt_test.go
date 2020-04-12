@@ -48,17 +48,36 @@ func TestUnmarshalThemisECPublicKey(t *testing.T) {
 }
 
 func TestSecureMessageWrapUnwrap(t *testing.T) {
+	newKeypairAlice, err := NewECKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKeypairBob, err := NewECKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newThemisAlice, err := newKeypairAlice.ToThemisKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newThemisBob, err := newKeypairBob.ToThemisKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSecureMessageWrapUnwrap(newThemisAlice, newThemisBob, t)
+
+	keypairAlice, err := keys.New(keys.TypeEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keypairBob, err := keys.New(keys.TypeEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSecureMessageWrapUnwrap(keypairAlice, keypairBob, t)
+}
+func testSecureMessageWrapUnwrap(keypairAlice, keypairBob *keys.Keypair, t *testing.T) {
 	for i := 0; i < 1000; i++ {
-
-		keypairAlice, err := keys.New(keys.TypeEC)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keypairBob, err := keys.New(keys.TypeEC)
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		alicePrivate, err := UnmarshalThemisECPrivateKey(keypairAlice.Private.Value)
 		if err != nil {
 			t.Fatal(err)
@@ -157,7 +176,7 @@ func BenchmarkSecureMessage(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sm, err := NewSecureMessage(aliceKeyPair.Private, bobKeyPair.Public)
 		if err != nil {
@@ -189,7 +208,7 @@ func BenchmarkThemisSecureMessage(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sm := message.New(aliceKeyPair.Private, bobKeyPair.Public)
 		if err != nil {

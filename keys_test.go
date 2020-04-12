@@ -82,6 +82,5 @@ func BenchmarkNewThemisECKeyPair(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-
 	}
 }
