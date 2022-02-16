@@ -144,7 +144,7 @@ func DecryptAcrastruct(data []byte, privateKey *PrivateECKey, zone []byte) ([]by
 	}
 
 	decrypted, err := CellSealDecrypt(symmetricKey, innerData[KeyBlockLength+DataLengthSize:], zone)
-	utils.FillSlice(byte(0), symmetricKey)
+	utils.ZeroizeBytes(symmetricKey)
 	if err != nil {
 		return nil, err
 	}
